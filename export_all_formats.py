@@ -7,21 +7,62 @@ import json
 import sys
 from pathlib import Path
 
-def load_test_cases_from_json(json_file):
-    """Load test cases from a JSON file"""
+def load_test_cases_from_file(input_file):
+    """Load test cases from various file formats (JSON, C#, Python)"""
+    ext = Path(input_file).suffix.lower()
     try:
-        with open(json_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        with open(input_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        if ext == '.json':
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as e:
+                print(f"✗ Error: Invalid JSON format in '{input_file}'\n   {e}")
+                return None
+        elif ext == '.cs':
+            # Enhanced C# test case extraction: supports [Fact], [Test], [TestCase], and method names
+            import re
+            test_cases = []
+            # Find all test methods with [Fact] or [Test] attributes
+            # Optionally, extract summary comments above methods
+            pattern = r'(?:\s*///\s*(?P<summary>.*))?\s*\[\s*(Fact|Test|TestCase)[^\]]*\]\s*(?:public|private|protected)?\s*async\s*Task\s+(?P<method>\w+)'
+            for match in re.finditer(pattern, content):
+                tc_name = match.group('method')
+                summary = match.group('summary')
+                tc_id = f'TC_{len(test_cases)+1:03d}'
+                display_name = summary if summary else tc_name.replace('_', ' ')
+                test_cases.append({'id': tc_id, 'name': display_name})
+            # If no matches, fallback to [TestCase] and comment-based extraction
+            if not test_cases:
+                for match in re.finditer(r'\[TestCase\s*\(([^)]*)\)\]|//\s*TestCase:\s*(.*)', content):
+                    if match.group(1):
+                        args = [x.strip(' "') for x in match.group(1).split(',')]
+                        tc_id = args[0] if len(args) > 0 else None
+                        tc_name = args[1] if len(args) > 1 else None
+                    else:
+                        tc_id, tc_name = None, match.group(2)
+                    test_cases.append({'id': tc_id or f'TC_{len(test_cases)+1:03d}', 'name': tc_name or 'Unnamed Test'})
+            return test_cases
+        elif ext == '.py':
+            # Basic Python test case extraction (looks for docstrings or comments with 'TestCase:')
+            import re
+            test_cases = []
+            # Example: # TestCase: TC_001, Login Test
+            for match in re.finditer(r'#\s*TestCase:\s*(.*)', content):
+                parts = [x.strip() for x in match.group(1).split(',')]
+                tc_id = parts[0] if len(parts) > 0 else None
+                tc_name = parts[1] if len(parts) > 1 else None
+                test_cases.append({'id': tc_id or f'TC_{len(test_cases)+1:03d}', 'name': tc_name or 'Unnamed Test'})
+            return test_cases
+        else:
+            print(f"✗ Unsupported file format: {ext}")
+            return None
     except FileNotFoundError:
-        print(f"✗ Error: File '{json_file}' not found!")
-        print(f"   Please create '{json_file}' in the same folder as this script.")
-        return None
-    except json.JSONDecodeError as e:
-        print(f"✗ Error: Invalid JSON format in '{json_file}'")
-        print(f"   {e}")
+        print(f"✗ Error: File '{input_file}' not found!")
+        print(f"   Please provide a valid test case file.")
         return None
     except Exception as e:
-        print(f"✗ Error loading JSON file: {e}")
+        print(f"✗ Error loading file: {e}")
         return None
 
 def export_all_formats(test_cases, base_filename="test_cases"):
@@ -78,30 +119,34 @@ if __name__ == "__main__":
     print("=" * 60)
     print("📄 Test Case Export Tool")
     print("=" * 60)
-    
-    # Load test cases from JSON file
-    json_filename = 'copilot_test_cases.json'
-    print(f"\n📂 Looking for: {json_filename}")
-    
-    test_cases = load_test_cases_from_json(json_filename)
-    
+
+    # Accept input file as argument or default to copilot_test_cases.json
+    if len(sys.argv) > 1:
+        input_filename = sys.argv[1]
+    else:
+        input_filename = 'copilot_test_cases.json'
+
+    print(f"\n📂 Looking for: {input_filename}")
+
+    test_cases = load_test_cases_from_file(input_filename)
+
     if test_cases:
         print(f"✅ Successfully loaded {len(test_cases)} test case(s)")
-        
+
         # Show summary of loaded test cases
         print("\n📋 Test Cases Found:")
         for idx, tc in enumerate(test_cases, 1):
             tc_name = tc.get('name', 'Unnamed Test')
             tc_id = tc.get('id', f'TC_{idx:03d}')
             print(f"   {idx}. [{tc_id}] {tc_name}")
-        
+
         # Export to all formats
-        export_all_formats(test_cases, "copilot_test_cases_output")
-        
+        export_all_formats(test_cases, Path(input_filename).stem + "_output")
+
         print("\n" + "=" * 60)
         print("✨ Done! Check the generated files in this folder.")
         print("=" * 60)
     else:
         print("\n❌ Cannot proceed without test cases.")
-        print("\n💡 Make sure you have a file named 'copilot_test_cases.json'")
-        print("   in the same folder with your test case data.")
+        print("\n💡 Make sure you provide a valid test case file (JSON, C#, Python)")
+
