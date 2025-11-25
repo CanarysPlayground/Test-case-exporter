@@ -1,343 +1,464 @@
-import pytest
-from unittest.mock import Mock, patch
-# Assuming you have a login module with a User class and login function
-# from your_app.auth import login, User, AuthenticationError
-
-
-class TestLoginFunctionality:
-    """Comprehensive unit tests for login functionality"""
-    
-    # ============================================================
-    # POSITIVE TEST CASES - Valid Login Scenarios
-    # ============================================================
-    
-    def test_login_with_valid_credentials(self):
-        """Test successful login with correct username and password"""
-        username = "valid_user"
-        password = "ValidPass123!"
-        
-        # Mock authentication
-        result = login(username, password)
-        
-        assert result is not None
-        assert result.is_authenticated is True
-        assert result.username == username
-    
-    def test_login_with_email_as_username(self):
-        """Test login using email address as username"""
-        email = "user@example.com"
-        password = "ValidPass123!"
-        
-        result = login(email, password)
-        
-        assert result is not None
-        assert result.is_authenticated is True
-    
-    def test_login_case_insensitive_username(self):
-        """Test login with different case variations of username"""
-        result1 = login("TestUser", "password123")
-        result2 = login("testuser", "password123")
-        
-        assert result1.username.lower() == result2.username.lower()
-    
-    def test_login_with_special_characters_in_password(self):
-        """Test login with password containing special characters"""
-        username = "test_user"
-        password = "P@ssw0rd!#$%"
-        
-        result = login(username, password)
-        
-        assert result.is_authenticated is True
-    
-    # ============================================================
-    # NEGATIVE TEST CASES - Invalid Login Scenarios
-    # ============================================================
-    
-    def test_login_with_invalid_password(self):
-        """Test login fails with incorrect password"""
-        username = "valid_user"
-        password = "WrongPassword"
-        
-        with pytest.raises(AuthenticationError) as exc_info:
-            login(username, password)
-        
-        assert "Invalid credentials" in str(exc_info.value)
-    
-    def test_login_with_nonexistent_username(self):
-        """Test login fails with non-existent username"""
-        username = "nonexistent_user"
-        password = "SomePassword123"
-        
-        with pytest.raises(AuthenticationError):
-            login(username, password)
-    
-    def test_login_with_empty_username(self):
-        """Test login fails with empty username"""
-        with pytest.raises(ValueError) as exc_info:
-            login("", "password123")
-        
-        assert "Username cannot be empty" in str(exc_info.value)
-    
-    def test_login_with_empty_password(self):
-        """Test login fails with empty password"""
-        with pytest.raises(ValueError) as exc_info:
-            login("valid_user", "")
-        
-        assert "Password cannot be empty" in str(exc_info.value)
-    
-    def test_login_with_none_username(self):
-        """Test login fails with None as username"""
-        with pytest.raises(ValueError):
-            login(None, "password123")
-    
-    def test_login_with_none_password(self):
-        """Test login fails with None as password"""
-        with pytest.raises(ValueError):
-            login("valid_user", None)
-    
-    def test_login_with_whitespace_only_username(self):
-        """Test login fails with whitespace-only username"""
-        with pytest.raises(ValueError):
-            login("   ", "password123")
-    
-    def test_login_with_whitespace_only_password(self):
-        """Test login fails with whitespace-only password"""
-        with pytest.raises(ValueError):
-            login("valid_user", "   ")
-    
-    # ============================================================
-    # SECURITY TEST CASES
-    # ============================================================
-    
-    def test_login_with_sql_injection_attempt(self):
-        """Test login prevents SQL injection attacks"""
-        username = "admin' OR '1'='1"
-        password = "password"
-        
-        with pytest.raises(AuthenticationError):
-            login(username, password)
-    
-    def test_login_password_not_logged(self, caplog):
-        """Test that password is never logged in plain text"""
-        username = "test_user"
-        password = "SecretPassword123"
-        
-        try:
-            login(username, password)
-        except Exception:
-            pass
-        
-        # Check that password doesn't appear in logs
-        assert password not in caplog.text
-    
-    def test_login_rate_limiting(self):
-        """Test login implements rate limiting after multiple failed attempts"""
-        username = "test_user"
-        wrong_password = "WrongPass"
-        
-        # Attempt multiple failed logins
-        for i in range(5):
-            with pytest.raises(AuthenticationError):
-                login(username, wrong_password)
-        
-        # 6th attempt should be rate-limited
-        with pytest.raises(RateLimitError) as exc_info:
-            login(username, wrong_password)
-        
-        assert "Too many login attempts" in str(exc_info.value)
-    
-    def test_login_account_lockout_after_failed_attempts(self):
-        """Test account gets locked after multiple failed login attempts"""
-        username = "test_user"
-        
-        # Simulate 10 failed login attempts
-        for i in range(10):
-            try:
-                login(username, "WrongPassword")
-            except AuthenticationError:
-                pass
-        
-        # Even with correct password, account should be locked
-        with pytest.raises(AccountLockedError):
-            login(username, "CorrectPassword123")
-    
-    # ============================================================
-    # EDGE CASES
-    # ============================================================
-    
-    def test_login_with_very_long_username(self):
-        """Test login with unusually long username"""
-        username = "a" * 1000
-        password = "password123"
-        
-        with pytest.raises(ValueError) as exc_info:
-            login(username, password)
-        
-        assert "Username too long" in str(exc_info.value)
-    
-    def test_login_with_very_long_password(self):
-        """Test login with unusually long password"""
-        username = "test_user"
-        password = "p" * 10000
-        
-        with pytest.raises(ValueError) as exc_info:
-            login(username, password)
-        
-        assert "Password too long" in str(exc_info.value)
-    
-    def test_login_with_unicode_characters(self):
-        """Test login with unicode characters in credentials"""
-        username = "用户名"
-        password = "密码123"
-        
-        result = login(username, password)
-        
-        assert result is not None
-    
-    def test_login_with_leading_trailing_spaces(self):
-        """Test login strips leading/trailing spaces from username"""
-        result1 = login("  test_user  ", "password123")
-        result2 = login("test_user", "password123")
-        
-        assert result1.username == result2.username
-    
-    # ============================================================
-    # SESSION MANAGEMENT TEST CASES
-    # ============================================================
-    
-    def test_login_creates_session_token(self):
-        """Test successful login creates a session token"""
-        username = "test_user"
-        password = "ValidPass123"
-        
-        result = login(username, password)
-        
-        assert result.session_token is not None
-        assert len(result.session_token) > 20
-    
-    def test_login_session_token_is_unique(self):
-        """Test each login creates a unique session token"""
-        username = "test_user"
-        password = "ValidPass123"
-        
-        result1 = login(username, password)
-        result2 = login(username, password)
-        
-        assert result1.session_token != result2.session_token
-    
-    def test_login_sets_session_expiry(self):
-        """Test login sets appropriate session expiry time"""
-        username = "test_user"
-        password = "ValidPass123"
-        
-        result = login(username, password)
-        
-        assert result.session_expiry is not None
-        assert result.session_expiry > datetime.now()
-    
-    # ============================================================
-    # DATABASE/EXTERNAL DEPENDENCY TEST CASES
-    # ============================================================
-    
-    @patch('your_app.auth.database')
-    def test_login_handles_database_connection_error(self, mock_db):
-        """Test login handles database connection failures gracefully"""
-        mock_db.connect.side_effect = ConnectionError("DB unavailable")
-        
-        with pytest.raises(ServiceUnavailableError):
-            login("test_user", "password123")
-    
-    @patch('your_app.auth.user_repository')
-    def test_login_queries_user_repository(self, mock_repo):
-        """Test login correctly queries user repository"""
-        mock_user = Mock()
-        mock_user.username = "test_user"
-        mock_user.password_hash = "hashed_password"
-        mock_repo.find_by_username.return_value = mock_user
-        
-        login("test_user", "password123")
-        
-        mock_repo.find_by_username.assert_called_once_with("test_user")
-    
-    # ============================================================
-    # PASSWORD HASHING TEST CASES
-    # ============================================================
-    
-    def test_login_uses_secure_password_comparison(self):
-        """Test login uses timing-safe password comparison"""
-        # This prevents timing attacks
-        username = "test_user"
-        password = "ValidPass123"
-        
-        # Should use secrets.compare_digest or similar
-        with patch('secrets.compare_digest') as mock_compare:
-            mock_compare.return_value = True
-            login(username, password)
-            
-            assert mock_compare.called
-    
-    # ============================================================
-    # TWO-FACTOR AUTHENTICATION TEST CASES
-    # ============================================================
-    
-    def test_login_with_2fa_required(self):
-        """Test login with 2FA prompts for second factor"""
-        username = "2fa_user"
-        password = "ValidPass123"
-        
-        result = login(username, password)
-        
-        assert result.requires_2fa is True
-        assert result.is_authenticated is False
-    
-    def test_login_with_valid_2fa_code(self):
-        """Test login completes successfully with valid 2FA code"""
-        username = "2fa_user"
-        password = "ValidPass123"
-        totp_code = "123456"
-        
-        result = login(username, password, totp_code=totp_code)
-        
-        assert result.is_authenticated is True
-    
-    def test_login_with_invalid_2fa_code(self):
-        """Test login fails with invalid 2FA code"""
-        username = "2fa_user"
-        password = "ValidPass123"
-        totp_code = "000000"
-        
-        with pytest.raises(AuthenticationError):
-            login(username, password, totp_code=totp_code)
-
-
-# ============================================================
-# FIXTURE DEFINITIONS
-# ============================================================
-
-@pytest.fixture
-def mock_user_database():
-    """Fixture providing mock user database"""
-    return {
-        "valid_user": {
+{
+  "test_suite": {
+    "name": "TestLoginFunctionality",
+    "description": "Comprehensive unit tests for login functionality",
+    "categories": [
+      {
+        "category": "POSITIVE_TEST_CASES",
+        "description": "Valid Login Scenarios",
+        "tests": [
+          {
+            "test_name": "test_login_with_valid_credentials",
+            "description": "Test successful login with correct username and password",
+            "test_data": {
+              "username": "valid_user",
+              "password": "ValidPass123!"
+            },
+            "expected_result": {
+              "is_authenticated": true,
+              "username": "valid_user"
+            },
+            "assertions": [
+              "result is not None",
+              "result.is_authenticated is True",
+              "result.username == username"
+            ]
+          },
+          {
+            "test_name": "test_login_with_email_as_username",
+            "description": "Test login using email address as username",
+            "test_data": {
+              "email": "user@example.com",
+              "password": "ValidPass123!"
+            },
+            "expected_result": {
+              "is_authenticated": true
+            },
+            "assertions": [
+              "result is not None",
+              "result.is_authenticated is True"
+            ]
+          },
+          {
+            "test_name": "test_login_case_insensitive_username",
+            "description": "Test login with different case variations of username",
+            "test_data": [
+              {
+                "username": "TestUser",
+                "password": "password123"
+              },
+              {
+                "username": "testuser",
+                "password": "password123"
+              }
+            ],
+            "expected_result": {
+              "usernames_match": true
+            },
+            "assertions": [
+              "result1.username.lower() == result2.username.lower()"
+            ]
+          },
+          {
+            "test_name": "test_login_with_special_characters_in_password",
+            "description": "Test login with password containing special characters",
+            "test_data": {
+              "username": "test_user",
+              "password": "P@ssw0rd!#$%"
+            },
+            "expected_result": {
+              "is_authenticated": true
+            },
+            "assertions": [
+              "result.is_authenticated is True"
+            ]
+          }
+        ]
+      },
+      {
+        "category": "NEGATIVE_TEST_CASES",
+        "description": "Invalid Login Scenarios",
+        "tests": [
+          {
+            "test_name": "test_login_with_invalid_password",
+            "description": "Test login fails with incorrect password",
+            "test_data": {
+              "username": "valid_user",
+              "password": "WrongPassword"
+            },
+            "expected_exception": "AuthenticationError",
+            "expected_message": "Invalid credentials"
+          },
+          {
+            "test_name": "test_login_with_nonexistent_username",
+            "description": "Test login fails with non-existent username",
+            "test_data": {
+              "username": "nonexistent_user",
+              "password": "SomePassword123"
+            },
+            "expected_exception": "AuthenticationError"
+          },
+          {
+            "test_name": "test_login_with_empty_username",
+            "description": "Test login fails with empty username",
+            "test_data": {
+              "username": "",
+              "password": "password123"
+            },
+            "expected_exception": "ValueError",
+            "expected_message": "Username cannot be empty"
+          },
+          {
+            "test_name": "test_login_with_empty_password",
+            "description": "Test login fails with empty password",
+            "test_data": {
+              "username": "valid_user",
+              "password": ""
+            },
+            "expected_exception": "ValueError",
+            "expected_message": "Password cannot be empty"
+          },
+          {
+            "test_name": "test_login_with_none_username",
+            "description": "Test login fails with None as username",
+            "test_data": {
+              "username": null,
+              "password": "password123"
+            },
+            "expected_exception": "ValueError"
+          },
+          {
+            "test_name": "test_login_with_none_password",
+            "description": "Test login fails with None as password",
+            "test_data": {
+              "username": "valid_user",
+              "password": null
+            },
+            "expected_exception": "ValueError"
+          },
+          {
+            "test_name": "test_login_with_whitespace_only_username",
+            "description": "Test login fails with whitespace-only username",
+            "test_data": {
+              "username": "   ",
+              "password": "password123"
+            },
+            "expected_exception": "ValueError"
+          },
+          {
+            "test_name": "test_login_with_whitespace_only_password",
+            "description": "Test login fails with whitespace-only password",
+            "test_data": {
+              "username": "valid_user",
+              "password": "   "
+            },
+            "expected_exception": "ValueError"
+          }
+        ]
+      },
+      {
+        "category": "SECURITY_TEST_CASES",
+        "description": "Security related test scenarios",
+        "tests": [
+          {
+            "test_name": "test_login_with_sql_injection_attempt",
+            "description": "Test login prevents SQL injection attacks",
+            "test_data": {
+              "username": "admin' OR '1'='1",
+              "password": "password"
+            },
+            "expected_exception": "AuthenticationError"
+          },
+          {
+            "test_name": "test_login_password_not_logged",
+            "description": "Test that password is never logged in plain text",
+            "test_data": {
+              "username": "test_user",
+              "password": "SecretPassword123"
+            },
+            "expected_result": {
+              "password_not_in_logs": true
+            },
+            "assertions": [
+              "password not in caplog.text"
+            ]
+          },
+          {
+            "test_name": "test_login_rate_limiting",
+            "description": "Test login implements rate limiting after multiple failed attempts",
+            "test_data": {
+              "username": "test_user",
+              "wrong_password": "WrongPass",
+              "failed_attempts": 5
+            },
+            "expected_exception": "RateLimitError",
+            "expected_message": "Too many login attempts"
+          },
+          {
+            "test_name": "test_login_account_lockout_after_failed_attempts",
+            "description": "Test account gets locked after multiple failed login attempts",
+            "test_data": {
+              "username": "test_user",
+              "failed_attempts": 10,
+              "correct_password": "CorrectPassword123"
+            },
+            "expected_exception": "AccountLockedError"
+          }
+        ]
+      },
+      {
+        "category": "EDGE_CASES",
+        "description": "Edge case scenarios",
+        "tests": [
+          {
+            "test_name": "test_login_with_very_long_username",
+            "description": "Test login with unusually long username",
+            "test_data": {
+              "username": "a",
+              "username_length": 1000,
+              "password": "password123"
+            },
+            "expected_exception": "ValueError",
+            "expected_message": "Username too long"
+          },
+          {
+            "test_name": "test_login_with_very_long_password",
+            "description": "Test login with unusually long password",
+            "test_data": {
+              "username": "test_user",
+              "password": "p",
+              "password_length": 10000
+            },
+            "expected_exception": "ValueError",
+            "expected_message": "Password too long"
+          },
+          {
+            "test_name": "test_login_with_unicode_characters",
+            "description": "Test login with unicode characters in credentials",
+            "test_data": {
+              "username": "用户名",
+              "password": "密码123"
+            },
+            "expected_result": {
+              "result_not_null": true
+            },
+            "assertions": [
+              "result is not None"
+            ]
+          },
+          {
+            "test_name": "test_login_with_leading_trailing_spaces",
+            "description": "Test login strips leading/trailing spaces from username",
+            "test_data": [
+              {
+                "username": "  test_user  ",
+                "password": "password123"
+              },
+              {
+                "username": "test_user",
+                "password": "password123"
+              }
+            ],
+            "expected_result": {
+              "usernames_match": true
+            },
+            "assertions": [
+              "result1.username == result2.username"
+            ]
+          }
+        ]
+      },
+      {
+        "category": "SESSION_MANAGEMENT_TEST_CASES",
+        "description": "Session management scenarios",
+        "tests": [
+          {
+            "test_name": "test_login_creates_session_token",
+            "description": "Test successful login creates a session token",
+            "test_data": {
+              "username": "test_user",
+              "password": "ValidPass123"
+            },
+            "expected_result": {
+              "session_token_exists": true,
+              "min_token_length": 20
+            },
+            "assertions": [
+              "result.session_token is not None",
+              "len(result.session_token) > 20"
+            ]
+          },
+          {
+            "test_name": "test_login_session_token_is_unique",
+            "description": "Test each login creates a unique session token",
+            "test_data": {
+              "username": "test_user",
+              "password": "ValidPass123",
+              "login_count": 2
+            },
+            "expected_result": {
+              "tokens_unique": true
+            },
+            "assertions": [
+              "result1.session_token != result2.session_token"
+            ]
+          },
+          {
+            "test_name": "test_login_sets_session_expiry",
+            "description": "Test login sets appropriate session expiry time",
+            "test_data": {
+              "username": "test_user",
+              "password": "ValidPass123"
+            },
+            "expected_result": {
+              "expiry_exists": true,
+              "expiry_in_future": true
+            },
+            "assertions": [
+              "result.session_expiry is not None",
+              "result.session_expiry > datetime.now()"
+            ]
+          }
+        ]
+      },
+      {
+        "category": "DATABASE_EXTERNAL_DEPENDENCY_TEST_CASES",
+        "description": "Database and external dependency scenarios",
+        "tests": [
+          {
+            "test_name": "test_login_handles_database_connection_error",
+            "description": "Test login handles database connection failures gracefully",
+            "test_data": {
+              "username": "test_user",
+              "password": "password123"
+            },
+            "mocked_component": "database",
+            "mock_behavior": {
+              "method": "connect",
+              "side_effect": "ConnectionError",
+              "message": "DB unavailable"
+            },
+            "expected_exception": "ServiceUnavailableError"
+          },
+          {
+            "test_name": "test_login_queries_user_repository",
+            "description": "Test login correctly queries user repository",
+            "test_data": {
+              "username": "test_user",
+              "password": "password123"
+            },
+            "mocked_component": "user_repository",
+            "mock_return": {
+              "username": "test_user",
+              "password_hash": "hashed_password"
+            },
+            "assertions": [
+              "mock_repo.find_by_username.assert_called_once_with('test_user')"
+            ]
+          }
+        ]
+      },
+      {
+        "category": "PASSWORD_HASHING_TEST_CASES",
+        "description": "Password hashing and comparison scenarios",
+        "tests": [
+          {
+            "test_name": "test_login_uses_secure_password_comparison",
+            "description": "Test login uses timing-safe password comparison",
+            "test_data": {
+              "username": "test_user",
+              "password": "ValidPass123"
+            },
+            "security_requirement": "Uses secrets.compare_digest to prevent timing attacks",
+            "mocked_component": "secrets.compare_digest",
+            "assertions": [
+              "mock_compare.called"
+            ]
+          }
+        ]
+      },
+      {
+        "category": "TWO_FACTOR_AUTHENTICATION_TEST_CASES",
+        "description": "Two-factor authentication scenarios",
+        "tests": [
+          {
+            "test_name": "test_login_with_2fa_required",
+            "description": "Test login with 2FA prompts for second factor",
+            "test_data": {
+              "username": "2fa_user",
+              "password": "ValidPass123"
+            },
+            "expected_result": {
+              "requires_2fa": true,
+              "is_authenticated": false
+            },
+            "assertions": [
+              "result.requires_2fa is True",
+              "result.is_authenticated is False"
+            ]
+          },
+          {
+            "test_name": "test_login_with_valid_2fa_code",
+            "description": "Test login completes successfully with valid 2FA code",
+            "test_data": {
+              "username": "2fa_user",
+              "password": "ValidPass123",
+              "totp_code": "123456"
+            },
+            "expected_result": {
+              "is_authenticated": true
+            },
+            "assertions": [
+              "result.is_authenticated is True"
+            ]
+          },
+          {
+            "test_name": "test_login_with_invalid_2fa_code",
+            "description": "Test login fails with invalid 2FA code",
+            "test_data": {
+              "username": "2fa_user",
+              "password": "ValidPass123",
+              "totp_code": "000000"
+            },
+            "expected_exception": "AuthenticationError"
+          }
+        ]
+      }
+    ],
+    "fixtures": [
+      {
+        "fixture_name": "mock_user_database",
+        "description": "Fixture providing mock user database",
+        "data": {
+          "valid_user": {
             "username": "valid_user",
             "password_hash": "hashed_password",
             "email": "user@example.com",
-            "is_active": True
+            "is_active": true
+          }
         }
-    }
-
-
-@pytest.fixture
-def mock_login_service():
-    """Fixture providing mock login service"""
-    mock_service = Mock()
-    mock_service.authenticate.return_value = True
-    return mock_service
-
-
-@pytest.fixture(autouse=True)
-def reset_rate_limit():
-    """Reset rate limiting between tests"""
-    # Clear rate limit cache before each test
-    yield
-    # Cleanup after test
+      },
+      {
+        "fixture_name": "mock_login_service",
+        "description": "Fixture providing mock login service",
+        "mock_config": {
+          "authenticate_return_value": true
+        }
+      },
+      {
+        "fixture_name": "reset_rate_limit",
+        "description": "Reset rate limiting between tests",
+        "autouse": true,
+        "cleanup": "Clear rate limit cache before each test"
+      }
+    ]
+  },
+  "metadata": {
+    "framework": "pytest",
+    "module": "login_functionality",
+    "total_categories": 8,
+    "total_tests": 29,
+    "language": "python",
+    "requires_mocking": true
+  }
+}
